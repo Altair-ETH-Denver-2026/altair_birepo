@@ -638,11 +638,18 @@ export default function UserMenu() {
     }
     return ethers.isAddress(trimmed);
   };
-  const isValidWithdrawAmount = (amount: string) => {
+  const isValidWithdrawAmount = (chainKey: ChainKey | 'ALL', token: string, amount: string) => {
     const trimmed = amount.trim();
     if (!trimmed) return false;
     const amountNumber = Number(trimmed);
-    return Number.isFinite(amountNumber) && amountNumber > 0;
+    if (!Number.isFinite(amountNumber) || amountNumber <= 0) return false;
+    if (chainKey === 'ALL') return false;
+    const normalizedToken = token.trim().toUpperCase();
+    if (!normalizedToken) return false;
+    const balanceValue = resolveBalanceForSymbol(chainKey, normalizedToken);
+    const balanceNumber = Number(balanceValue);
+    if (!Number.isFinite(balanceNumber)) return false;
+    return amountNumber <= balanceNumber;
   };
   const resolveTokenDropdownOpen = (panelId: number) => Boolean(tokenDropdownOpen[panelId]);
   const resolveTokenDropdownForceAll = (panelId: number) => Boolean(tokenDropdownForceAll[panelId]);
@@ -727,8 +734,12 @@ export default function UserMenu() {
     const existing = resolveWithdrawError(panelId);
     if (existing === 'No token amount' && amount.trim()) {
       clearWithdrawError(panelId);
-    } else if (existing === 'Invalid amount' && isValidWithdrawAmount(amount)) {
-      clearWithdrawError(panelId);
+    } else if (existing && existing.startsWith('Insufficient ') && existing.endsWith(' in Wallet')) {
+      const chainKey = (walletPanels.find((panel) => panel.id === panelId)?.chainKey ?? 'ALL') as ChainKey | 'ALL';
+      const token = resolveWithdrawState(panelId).token;
+      if (isValidWithdrawAmount(chainKey, token, amount)) {
+        clearWithdrawError(panelId);
+      }
     }
   };
   const updateWithdrawAddress = (panelId: number, address: string) => {
@@ -1256,10 +1267,42 @@ export default function UserMenu() {
                 }
                 const amountNumber = Number(amount);
                 console.log('[UserMenu] amount:', amountNumber);
-                if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+                if (!isValidWithdrawAmount(chainKey, token, amount)) {
+                  const tokenLabel = token.trim().toUpperCase() || 'TOKEN';
                   clearWithdrawReceipt(panel.id);
-                  setWithdrawErrors((prev) => ({ ...prev, [panel.id]: 'Invalid amount' }));
+                  setWithdrawErrors((prev) => ({
+                    ...prev,
+                    [panel.id]: `Insufficient ${tokenLabel} in Wallet`,
+                  }));
                   return;
+                }
+                const gasToken = GAS_TOKENS[chainKey] ?? null;
+                if (gasToken) {
+                  console.log('[UserMenu] gasToken', gasToken);
+                  const reserve = Number(GAS_RESERVES[chainKey] ?? 0);
+                  console.log('[UserMenu] reserve', reserve);
+                  const gasBalanceValue = resolveBalanceForSymbol(chainKey, gasToken);
+                  console.log('[UserMenu] gasBalanceValue', gasBalanceValue);
+                  const gasBalanceNumber = Number(gasBalanceValue);
+                  console.log('[UserMenu] gasBalanceNumber', gasBalanceNumber);
+                  const gasEffective = normalizedToken === gasToken
+                        ? Math.max(0, gasBalanceNumber - reserve - gasBalanceNumber)
+                        : Math.max(0, gasBalanceNumber - reserve)
+          
+                  // const gasEffective = Number.isFinite(gasBalanceNumber)
+                    // ? Math.max(0, gasBalanceNumber - reserve)
+                    // : Number.NaN;
+                  console.log('[UserMenu] gasEffective', gasEffective);
+                  if (!Number.isFinite(gasEffective) || gasEffective <= 0) {
+                    clearWithdrawReceipt(panel.id);
+                    setWithdrawErrors((prev) => ({
+                      ...prev,
+                      [panel.id]: chainKey === 'SOLANA_MAINNET'
+                        ? 'Insufficient SOL to pay gas fee'
+                        : 'Insufficient ETH to pay gas fee',
+                    }));
+                    return;
+                  }
                 }
                 if (!address) {
                   clearWithdrawReceipt(panel.id);
