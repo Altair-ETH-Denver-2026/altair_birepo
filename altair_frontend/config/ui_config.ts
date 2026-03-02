@@ -213,5 +213,8 @@ export const CHAT_PANEL = { // Chat panel styling used in altair_frontend1/src/c
   chat_highlight_color: '#3b82f6', // Chat highlight color in Chat.tsx
   chat_button_container_color: '#2563eb', // Chat button background in Chat.tsx
   chat_button_icon_color: '#ffffff', // Chat button icon color in Chat.tsx
+  typingSpeedMs: 3,
+  agentChatWidth: "85%",
+  userChatMaxWidth: "75%",
 };
 
