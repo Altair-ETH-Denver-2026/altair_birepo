@@ -8,7 +8,8 @@ import { useSwap } from '../lib/useSwap';
 import { useSolanaSwap } from '../lib/useSolanaSwap';
 import { useSolanaTransfer } from '../lib/useSolanaTransfer';
 import { withWaitLogger } from '../lib/waitLogger';
-import { UserRound, LogOut, Settings, Wallet, Wrench, Copy, Globe2, Check } from 'lucide-react';
+import { PublicKey } from '@solana/web3.js';
+import { UserRound, LogOut, Settings, Wallet, Wrench, Copy, Globe2, Check, ChevronDown } from 'lucide-react';
 import { useEffect as useClientEffect, useState as useClientState } from 'react';
 import { BLOCKCHAIN, CHAINS, GAS_RESERVES, GAS_TOKENS, type ChainKey } from '../../config/blockchain_config';
 import { BASE_MAINNET, BASE_SEPOLIA, ETH_MAINNET, ETH_SEPOLIA, SOLANA_MAINNET, resolveRpcUrls } from '../../config/chain_info';
@@ -74,7 +75,11 @@ export default function UserMenu() {
   const [addPanelHasCustomChain, setAddPanelHasCustomChain] = useState(false);
   const [selectedChain, setSelectedChain] = useState<ChainKey>(BLOCKCHAIN);
   const [withdrawPanels, setWithdrawPanels] = useState<Record<number, { active: boolean; token: string; amount: string; address: string }>>({});
-  const [withdrawReceipt, setWithdrawReceipt] = useState<Record<number, { active: boolean; txHash?: string | null }>>({});
+  const [withdrawReceipt, setWithdrawReceipt] = useState<Record<number, { active: boolean; status?: 'submitted' | 'executed'; txHash?: string | null }>>({});
+  const [withdrawErrors, setWithdrawErrors] = useState<Record<number, string | null>>({});
+  const [withdrawSubmittedDots, setWithdrawSubmittedDots] = useState<Record<number, number>>({});
+  const [tokenDropdownOpen, setTokenDropdownOpen] = useState<Record<number, boolean>>({});
+  const [tokenDropdownForceAll, setTokenDropdownForceAll] = useState<Record<number, boolean>>({});
   const [walletAddressCopyState, setWalletAddressCopyState] = useState<Record<string, boolean>>({});
   const walletAddressCopyTimers = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
   const executeSwap = useSwap(selectedChain);
@@ -124,6 +129,14 @@ export default function UserMenu() {
   const chainDropdownConfig = WALLET_DISPLAY.chainDropdown;
   const chainDropdownWidth = chainDropdownConfig.width * buttonSize;
   const chainDropdownFontSize = chainDropdownConfig.fontSize * buttonSize;
+  const tokenDropdownConfig = WALLET_DISPLAY.tokenDropdown ?? { width: chainDropdownWidth, fontSize: 12, fontName: 'sans-serif' };
+  const tokenDropdownWidthRaw = tokenDropdownConfig.width ?? chainDropdownWidth;
+  const tokenDropdownWidthValue = tokenDropdownWidthRaw ? tokenDropdownWidthRaw : '100%';
+  const tokenDropdownWidth = typeof tokenDropdownWidthValue === 'number'
+    ? tokenDropdownWidthValue * buttonSize
+    : tokenDropdownWidthValue;
+  const tokenDropdownFontSize = Number(tokenDropdownConfig.fontSize) * buttonSize;
+  const tokenDropdownFontFamily = tokenDropdownConfig.fontName;
   const withdrawSymbolInputConfig = WALLET_DISPLAY.withdraw?.symbolInput ?? { paddingLeft: buttonPaddingX, paddingRight: buttonPaddingX };
   const withdrawSymbolPaddingLeft = withdrawSymbolInputConfig.paddingLeft * buttonSize;
   const withdrawSymbolPaddingRight = withdrawSymbolInputConfig.paddingRight * buttonSize;
@@ -196,6 +209,31 @@ export default function UserMenu() {
   };
   const balanceCacheTtlMs = 30_000;
   const inFlightBalanceKey = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (Object.keys(withdrawReceipt).length === 0) return;
+    const timer = setInterval(() => {
+      setWithdrawSubmittedDots((prev) => {
+        let updated = false;
+        const next: Record<number, number> = { ...prev };
+        Object.entries(withdrawReceipt).forEach(([key, receipt]) => {
+          const panelId = Number(key);
+          if (!receipt?.active || receipt.status !== 'submitted') {
+            if (next[panelId] !== undefined) {
+              delete next[panelId];
+              updated = true;
+            }
+            return;
+          }
+          const current = next[panelId] ?? 0;
+          next[panelId] = (current + 1) % 4;
+          updated = true;
+        });
+        return updated ? next : prev;
+      });
+    }, 500);
+    return () => clearInterval(timer);
+  }, [withdrawReceipt]);
 
   const applyBalanceSnapshot = (
     chainKey: ChainKey,
@@ -559,7 +597,55 @@ export default function UserMenu() {
   const resolveWithdrawState = (panelId: number) =>
     withdrawPanels[panelId] ?? { active: false, token: '', amount: '', address: '' };
   const resolveWithdrawReceipt = (panelId: number) =>
-    withdrawReceipt[panelId] ?? { active: false, txHash: null };
+    withdrawReceipt[panelId] ?? { active: false, status: undefined, txHash: null };
+  const resolveWithdrawError = (panelId: number) => withdrawErrors[panelId] ?? null;
+  const resolveWithdrawDots = (panelId: number) => withdrawSubmittedDots[panelId] ?? 0;
+  const clearWithdrawError = (panelId: number) => {
+    setWithdrawErrors((prev) => {
+      if (!prev[panelId]) return prev;
+      const { [panelId]: _removed, ...rest } = prev;
+      return rest;
+    });
+  };
+  const clearWithdrawReceipt = (panelId: number) => {
+    setWithdrawReceipt((prev) => {
+      if (!prev[panelId]) return prev;
+      const { [panelId]: _removed, ...rest } = prev;
+      return rest;
+    });
+    setWithdrawSubmittedDots((prev) => {
+      if (!prev[panelId]) return prev;
+      const { [panelId]: _removed, ...rest } = prev;
+      return rest;
+    });
+  };
+  const isValidWithdrawToken = (chainKey: ChainKey | 'ALL', token: string) => {
+    if (chainKey === 'ALL') return false;
+    const normalized = token.trim().toUpperCase();
+    if (!normalized) return false;
+    return resolveTokenRows(chainKey).includes(normalized);
+  };
+  const isValidRecipientAddress = (chainKey: ChainKey | 'ALL', address: string) => {
+    const trimmed = address.trim();
+    if (!trimmed || chainKey === 'ALL') return false;
+    if (chainKey === 'SOLANA_MAINNET') {
+      try {
+        const pubkey = new PublicKey(trimmed);
+        return PublicKey.isOnCurve(pubkey.toBuffer());
+      } catch {
+        return false;
+      }
+    }
+    return ethers.isAddress(trimmed);
+  };
+  const isValidWithdrawAmount = (amount: string) => {
+    const trimmed = amount.trim();
+    if (!trimmed) return false;
+    const amountNumber = Number(trimmed);
+    return Number.isFinite(amountNumber) && amountNumber > 0;
+  };
+  const resolveTokenDropdownOpen = (panelId: number) => Boolean(tokenDropdownOpen[panelId]);
+  const resolveTokenDropdownForceAll = (panelId: number) => Boolean(tokenDropdownForceAll[panelId]);
   const resolveWalletCopyActive = (key: string) => Boolean(walletAddressCopyState[key]);
   const triggerWalletCopyState = (key: string) => {
     setWalletAddressCopyState((prev) => ({ ...prev, [key]: true }));
@@ -586,6 +672,16 @@ export default function UserMenu() {
         [panelId]: { ...current, active: nextActive },
       };
     });
+    setTokenDropdownOpen((prev) => {
+      if (!prev[panelId]) return prev;
+      const { [panelId]: _removed, ...rest } = prev;
+      return rest;
+    });
+    setTokenDropdownForceAll((prev) => {
+      if (!prev[panelId]) return prev;
+      const { [panelId]: _removed, ...rest } = prev;
+      return rest;
+    });
     setWithdrawReceipt((prev) => {
       const current = prev[panelId] ?? { active: false, txHash: null };
       if (current.active) {
@@ -593,6 +689,12 @@ export default function UserMenu() {
         return rest;
       }
       return prev;
+    });
+    clearWithdrawReceipt(panelId);
+    setWithdrawSubmittedDots((prev) => {
+      if (!prev[panelId]) return prev;
+      const { [panelId]: _removed, ...rest } = prev;
+      return rest;
     });
   };
   const updateWithdrawToken = (panelId: number, token: string) => {
@@ -603,6 +705,16 @@ export default function UserMenu() {
         [panelId]: { ...current, token },
       };
     });
+    if (resolveWithdrawError(panelId) === 'Invalid token') {
+      const chainKey = (walletPanels.find((panel) => panel.id === panelId)?.chainKey ?? 'ALL') as ChainKey | 'ALL';
+      if (isValidWithdrawToken(chainKey, token)) {
+        clearWithdrawError(panelId);
+      }
+      return;
+    }
+    if (resolveWithdrawError(panelId) === 'No token selected' && token.trim()) {
+      clearWithdrawError(panelId);
+    }
   };
   const updateWithdrawAmount = (panelId: number, amount: string) => {
     setWithdrawPanels((prev) => {
@@ -612,6 +724,12 @@ export default function UserMenu() {
         [panelId]: { ...current, amount },
       };
     });
+    const existing = resolveWithdrawError(panelId);
+    if (existing === 'No token amount' && amount.trim()) {
+      clearWithdrawError(panelId);
+    } else if (existing === 'Invalid amount' && isValidWithdrawAmount(amount)) {
+      clearWithdrawError(panelId);
+    }
   };
   const updateWithdrawAddress = (panelId: number, address: string) => {
     setWithdrawPanels((prev) => {
@@ -621,6 +739,17 @@ export default function UserMenu() {
         [panelId]: { ...current, address },
       };
     });
+    const existing = resolveWithdrawError(panelId);
+    if (existing === 'No recipient address' && address.trim()) {
+      clearWithdrawError(panelId);
+      return;
+    }
+    if (existing === 'Invalid recipient address') {
+      const chainKey = (walletPanels.find((panel) => panel.id === panelId)?.chainKey ?? 'ALL') as ChainKey | 'ALL';
+      if (isValidRecipientAddress(chainKey, address)) {
+        clearWithdrawError(panelId);
+      }
+    }
   };
   const renderBalances = (chainKey: ChainKey | 'ALL') => {
     const chainSnapshot = chainKey === 'ALL' ? null : balancesByChain[chainKey as ChainKey];
@@ -713,6 +842,21 @@ export default function UserMenu() {
               return rest;
             });
             setWithdrawReceipt((prev) => {
+              if (!prev[panel.id]) return prev;
+              const { [panel.id]: _removed, ...rest } = prev;
+              return rest;
+            });
+            setWithdrawErrors((prev) => {
+              if (!prev[panel.id]) return prev;
+              const { [panel.id]: _removed, ...rest } = prev;
+              return rest;
+            });
+            setTokenDropdownOpen((prev) => {
+              if (!prev[panel.id]) return prev;
+              const { [panel.id]: _removed, ...rest } = prev;
+              return rest;
+            });
+            setTokenDropdownForceAll((prev) => {
               if (!prev[panel.id]) return prev;
               const { [panel.id]: _removed, ...rest } = prev;
               return rest;
@@ -853,26 +997,91 @@ export default function UserMenu() {
                 Withdraw
               </button>
               {withdrawActive ? (
-                <div className="flex-1">
-                  <input
-                    type="text"
-                    list={withdrawInputId}
-                    value={withdrawState.token}
-                    onChange={(event) => updateWithdrawToken(panel.id, event.target.value)}
-                    placeholder="Select token..."
-                    className="w-full rounded-lg border border-gray-700 bg-gray-800/60 text-gray-100 placeholder-gray-500 focus:border-gray-500 focus:outline-none"
-                    style={{
-                      height: `${buttonHeight}px`,
-                      paddingLeft: `${withdrawSymbolPaddingLeft}px`,
-                      paddingRight: `${withdrawSymbolPaddingRight}px`,
-                      fontSize: `${buttonFontSize}px`,
-                    }}
-                  />
-                  <datalist id={withdrawInputId}>
-                    {tokenOptions.map((symbol) => (
-                      <option key={symbol} value={symbol} />
-                    ))}
-                  </datalist>
+                <div className="flex-1 relative">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={withdrawState.token}
+                      onChange={(event) => {
+                        updateWithdrawToken(panel.id, event.target.value);
+                        setTokenDropdownForceAll((prev) => ({ ...prev, [panel.id]: false }));
+                        setTokenDropdownOpen((prev) => ({ ...prev, [panel.id]: true }));
+                      }}
+                      onFocus={() => {
+                        setTokenDropdownOpen((prev) => ({ ...prev, [panel.id]: true }));
+                      }}
+                      onBlur={() => {
+                        setTimeout(() => {
+                          setTokenDropdownOpen((prev) => ({ ...prev, [panel.id]: false }));
+                          setTokenDropdownForceAll((prev) => ({ ...prev, [panel.id]: false }));
+                        }, 150);
+                      }}
+                      placeholder="Select token..."
+                      className="w-full rounded-lg border border-gray-700 bg-gray-800/60 text-gray-100 placeholder-gray-500 focus:border-gray-500 focus:outline-none"
+                      style={{
+                        height: `${buttonHeight}px`,
+                        paddingLeft: `${withdrawSymbolPaddingLeft}px`,
+                        paddingRight: `${withdrawSymbolPaddingRight + 20}px`,
+                        fontSize: `${buttonFontSize}px`,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setTokenDropdownForceAll((prev) => ({ ...prev, [panel.id]: true }));
+                        setTokenDropdownOpen((prev) => ({ ...prev, [panel.id]: true }));
+                      }}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200"
+                      aria-label="Show all tokens"
+                    >
+                      <ChevronDown className="w-4 h-4" />
+                    </button>
+                  </div>
+                  {(resolveTokenDropdownOpen(panel.id)
+                    && (resolveTokenDropdownForceAll(panel.id)
+                      || tokenOptions.some((symbol) =>
+                        symbol.toLowerCase().includes(withdrawState.token.trim().toLowerCase())
+                      ))) ? (
+                    <div
+                      className="absolute left-0 top-full z-[120] mt-1 rounded-xl border border-gray-500 bg-gray-900 shadow-2xl overflow-hidden"
+                      style={{
+                        width: typeof tokenDropdownWidth === 'string'
+                          ? tokenDropdownWidth
+                          : tokenDropdownWidth === 0
+                            ? '100%'
+                            : `${tokenDropdownWidth}px`,
+                        fontSize: `${tokenDropdownFontSize}px`,
+                        fontFamily: tokenDropdownFontFamily,
+                      }}
+                    >
+                      {(resolveTokenDropdownForceAll(panel.id)
+                        ? tokenOptions
+                        : tokenOptions.filter((symbol) =>
+                            symbol.toLowerCase().includes(withdrawState.token.trim().toLowerCase())
+                          )
+                      ).map((symbol) => (
+                        <button
+                          key={symbol}
+                          type="button"
+                          onClick={() => {
+                            updateWithdrawToken(panel.id, symbol);
+                            setTokenDropdownOpen((prev) => ({ ...prev, [panel.id]: false }));
+                            setTokenDropdownForceAll((prev) => ({ ...prev, [panel.id]: false }));
+                          }}
+                          className="flex w-full items-center uppercase tracking-[0.3em] text-gray-300 hover:bg-gray-800 transition-colors cursor-pointer"
+                          style={{
+                            paddingLeft: `${containerPaddingLeft}px`,
+                            paddingRight: `${containerPaddingRight}px`,
+                            paddingTop: '8px',
+                            paddingBottom: '8px',
+                          }}
+                        >
+                          {symbol}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <button
@@ -996,7 +1205,8 @@ export default function UserMenu() {
               value={resolveWithdrawState(panel.id).address}
               onChange={(event) => updateWithdrawAddress(panel.id, event.target.value)}
               placeholder="Recipient Address..."
-              className="flex w-full rounded-lg border border-gray-700 bg-gray-800/60 leading-snug focus:border-gray-500 focus:outline-none resize-none text-center"
+              className="flex w-full rounded-lg border border-gray-700 bg-gray-800/60 leading-snug focus:border-gray-500 focus:outline-none resize-none text-left
+                placeholder:text-[13px] placeholder:pt-2 placeholder:text-center focus:placeholder-transparent"
               style={{
                 minHeight: `${buttonHeight + 2}px`,
                 paddingLeft: `${withdrawAddressInputPaddingLeft}px`,
@@ -1026,24 +1236,85 @@ export default function UserMenu() {
                 console.log('[UserMenu] amount (state.amount):', state.amount);
                 const address = state.address?.trim();
                 console.log('[UserMenu] address (state.address):', state.address);
-                if (!token || !amount || !address) return;
-                if (panel.chainKey === 'ALL') return;
                 const chainKey = panel.chainKey as ChainKey;
+                const tokenOptions = resolveTokenRows(chainKey);
+                if (!token) {
+                  clearWithdrawReceipt(panel.id);
+                  setWithdrawErrors((prev) => ({ ...prev, [panel.id]: 'No token selected' }));
+                  return;
+                }
+                const normalizedToken = token.toUpperCase();
+                if (!tokenOptions.includes(normalizedToken)) {
+                  clearWithdrawReceipt(panel.id);
+                  setWithdrawErrors((prev) => ({ ...prev, [panel.id]: 'Invalid token' }));
+                  return;
+                }
+                if (!amount) {
+                  clearWithdrawReceipt(panel.id);
+                  setWithdrawErrors((prev) => ({ ...prev, [panel.id]: 'No token amount' }));
+                  return;
+                }
+                const amountNumber = Number(amount);
+                console.log('[UserMenu] amount:', amountNumber);
+                if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+                  clearWithdrawReceipt(panel.id);
+                  setWithdrawErrors((prev) => ({ ...prev, [panel.id]: 'Invalid amount' }));
+                  return;
+                }
+                if (!address) {
+                  clearWithdrawReceipt(panel.id);
+                  setWithdrawErrors((prev) => ({ ...prev, [panel.id]: 'No recipient address' }));
+                  return;
+                }
+                if (chainKey === 'SOLANA_MAINNET') {
+                  try {
+                    new PublicKey(address);
+                  } catch {
+                    clearWithdrawReceipt(panel.id);
+                    setWithdrawErrors((prev) => ({ ...prev, [panel.id]: 'Invalid recipient address' }));
+                    return;
+                  }
+                } else if (!ethers.isAddress(address)) {
+                  clearWithdrawReceipt(panel.id);
+                  setWithdrawErrors((prev) => ({ ...prev, [panel.id]: 'Invalid recipient address' }));
+                  return;
+                }
+                if (panel.chainKey === 'ALL') return;
                 console.log('[UserMenu] chainKey:', chainKey);
+                setWithdrawErrors((prev) => {
+                  if (!prev[panel.id]) return prev;
+                  const { [panel.id]: _removed, ...rest } = prev;
+                  return rest;
+                });
+                setWithdrawReceipt((prev) => ({
+                  ...prev,
+                  [panel.id]: { active: true, status: 'submitted', txHash: null },
+                }));
+                setWithdrawSubmittedDots((prev) => ({ ...prev, [panel.id]: 0 }));
                 const run = async () => {
                   if (isSolanaChain(chainKey)) {
                     const txHash = await executeSolanaTransfer(token, amount, address);
                     setWithdrawReceipt((prev) => ({
                       ...prev,
-                      [panel.id]: { active: true, txHash },
+                      [panel.id]: { active: true, status: 'executed', txHash },
                     }));
+                    setWithdrawSubmittedDots((prev) => {
+                      if (!prev[panel.id]) return prev;
+                      const { [panel.id]: _removed, ...rest } = prev;
+                      return rest;
+                    });
                     return;
                   }
                   const txHash = await sendEvmTransfer({ chainKey, recipient: address, tokenSymbol: token, amount });
                   setWithdrawReceipt((prev) => ({
                     ...prev,
-                    [panel.id]: { active: true, txHash },
+                    [panel.id]: { active: true, status: 'executed', txHash },
                   }));
+                  setWithdrawSubmittedDots((prev) => {
+                    if (!prev[panel.id]) return prev;
+                    const { [panel.id]: _removed, ...rest } = prev;
+                    return rest;
+                  });
                 };
                 void run().catch((err) => {
                   console.warn('[Withdraw] submit failed', err);
@@ -1115,35 +1386,52 @@ export default function UserMenu() {
           </div>
           {resolveWithdrawReceipt(panel.id).active ? (
             <div
-              className="w-full flex items-center justify-center gap-2 text-xs text-gray-400"
+              className="w-full flex items-center justify-center gap-2 text-xs text-gray-400 pb-1"
               style={{
                 paddingLeft: `${containerPaddingLeft}px`,
                 paddingRight: `${containerPaddingRight}px`,
               }}
             >
-              <span>Withdrawal Submitted</span>
-              <a
-                href={(() => {
-                  const txHash = resolveWithdrawReceipt(panel.id).txHash;
-                  if (!txHash) return '#';
-                  return isSolanaChain(panel.chainKey)
-                    ? `https://solscan.io/tx/${txHash}`
-                    : panel.chainKey === 'ETH_MAINNET'
-                      ? `https://etherscan.io/tx/${txHash}`
-                      : panel.chainKey === 'ETH_SEPOLIA'
-                        ? `https://sepolia.etherscan.io/tx/${txHash}`
-                        : panel.chainKey === 'BASE_MAINNET'
-                          ? `https://basescan.org/tx/${txHash}`
-                          : panel.chainKey === 'BASE_SEPOLIA'
-                            ? `https://sepolia.basescan.org/tx/${txHash}`
-                            : '#';
-                })()}
-                target="_blank"
-                rel="noreferrer"
-                className="text-blue-400 hover:text-blue-200"
-              >
-                View Transaction →
-              </a>
+              {resolveWithdrawReceipt(panel.id).status === 'executed' ? (
+                <>
+                  <span>Withdrawal Executed!</span>
+                  <a
+                    href={(() => {
+                      const txHash = resolveWithdrawReceipt(panel.id).txHash;
+                      if (!txHash) return '#';
+                      return isSolanaChain(panel.chainKey)
+                        ? `https://solscan.io/tx/${txHash}`
+                        : panel.chainKey === 'ETH_MAINNET'
+                          ? `https://etherscan.io/tx/${txHash}`
+                          : panel.chainKey === 'ETH_SEPOLIA'
+                            ? `https://sepolia.etherscan.io/tx/${txHash}`
+                            : panel.chainKey === 'BASE_MAINNET'
+                              ? `https://basescan.org/tx/${txHash}`
+                              : panel.chainKey === 'BASE_SEPOLIA'
+                                ? `https://sepolia.basescan.org/tx/${txHash}`
+                                : '#';
+                    })()}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-400 hover:text-blue-200"
+                  >
+                    View Transaction →
+                  </a>
+                </>
+              ) : (
+                <span>Withdrawal Submitted{'.'.repeat(resolveWithdrawDots(panel.id))}</span>
+              )}
+            </div>
+          ) : null}
+          {resolveWithdrawError(panel.id) ? (
+            <div
+              className="w-full text-center text-xs text-red-500 pb-1"
+              style={{
+                paddingLeft: `${containerPaddingLeft}px`,
+                paddingRight: `${containerPaddingRight}px`,
+              }}
+            >
+              {resolveWithdrawError(panel.id)}
             </div>
           ) : null}
           <div className="h-[1px] bg-gray-700 w-full" />

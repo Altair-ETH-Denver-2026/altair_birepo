@@ -52,6 +52,11 @@ export const WALLET_DISPLAY = { // Wallet panel/dropdown sizing and typography c
     width: 212, // Dropdown width in UserMenu.tsx
     fontSize: 12, // Dropdown font size in UserMenu.tsx
   },
+  tokenDropdown: { 
+    width: 124,
+    fontSize: 12,
+    fontName: 'sans-serif',
+  },
   withdraw: {
     symbolInput: {
       paddingLeft: 4,
@@ -112,7 +117,7 @@ export const WALLET_DISPLAY = { // Wallet panel/dropdown sizing and typography c
 
 export const WALLET_CHAIN_LABELS = { // Chain label map for wallet titles in UserMenu.tsx (resolveWalletTitle)
   ETH_MAINNET: 'Ethereum', // Label for ETH mainnet in UserMenu.tsx
-  ETH_SEPOLIA: 'ETH Testnet', // Label for ETH Sepolia in UserMenu.tsx
+  ETH_SEPOLIA: 'Ethereum Testnet', // Label for ETH Sepolia in UserMenu.tsx
   BASE_MAINNET: 'Base', // Label for Base mainnet in UserMenu.tsx
   BASE_SEPOLIA: 'Base Testnet', // Label for Base Sepolia in UserMenu.tsx
   SOLANA_MAINNET: 'Solana', // Label for Solana mainnet in UserMenu.tsx
