@@ -74,6 +74,9 @@ export default function UserMenu() {
   const [addPanelHasCustomChain, setAddPanelHasCustomChain] = useState(false);
   const [selectedChain, setSelectedChain] = useState<ChainKey>(BLOCKCHAIN);
   const [withdrawPanels, setWithdrawPanels] = useState<Record<number, { active: boolean; token: string; amount: string; address: string }>>({});
+  const [withdrawReceipt, setWithdrawReceipt] = useState<Record<number, { active: boolean; txHash?: string | null }>>({});
+  const [walletAddressCopyState, setWalletAddressCopyState] = useState<Record<string, boolean>>({});
+  const walletAddressCopyTimers = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
   const executeSwap = useSwap(selectedChain);
   const executeSolanaSwap = useSolanaSwap(selectedChain);
   const executeSolanaTransfer = useSolanaTransfer(selectedChain);
@@ -87,6 +90,12 @@ export default function UserMenu() {
   const buttonPaddingX = WALLET_DISPLAY.buttonWidth * buttonSize;
   const buttonHeight = WALLET_DISPLAY.buttonHeight * buttonSize;
   const buttonFontSize = 14 * buttonSize;
+  const topRowButtonColor = WALLET_DISPLAY.buttonColor ?? 'rgba(31, 41, 55, 0.6)';
+  const topRowButtonBorderColor = WALLET_DISPLAY.buttonBorderColor ?? '#374151';
+  const topRowButtonHighlightColor = WALLET_DISPLAY.buttonHighlightColor ?? '#1f2937';
+  const topRowButtonHighlightBorderColor = WALLET_DISPLAY.buttonHighlightBorderColor ?? topRowButtonBorderColor;
+  const topRowButtonActiveColor = WALLET_DISPLAY.buttonActiveColor ?? 'rgba(59, 130, 246, 0.2)';
+  const topRowButtonActiveBorderColor = WALLET_DISPLAY.buttonActiveBorderColor ?? '#60a5fa';
   const containerPaddingLeft = WALLET_DISPLAY.paddingLeft * buttonSize;
   const containerPaddingRight = WALLET_DISPLAY.paddingRight * buttonSize;
   const tokenRowConfig = WALLET_DISPLAY.rows;
@@ -144,6 +153,16 @@ export default function UserMenu() {
   const withdrawCancelButtonConfig = WALLET_DISPLAY.withdraw?.cancelButton ?? { textColor: '#f3f4f6', borderColor: '#f3f4f6', buttonColor: '#c74848', borderWidth: 1 };
   const withdrawSubmitBorderWidth = Number(withdrawSubmitButtonConfig.borderWidth) * buttonSize;
   const withdrawCancelBorderWidth = Number(withdrawCancelButtonConfig.borderWidth) * buttonSize;
+  const withdrawSubmitHighlightColor = withdrawSubmitButtonConfig.highlightColor ?? withdrawSubmitButtonConfig.buttonColor;
+  const withdrawSubmitActiveColor = withdrawSubmitButtonConfig.activeColor ?? withdrawSubmitButtonConfig.buttonColor;
+  const withdrawSubmitActiveBorderColor = withdrawSubmitButtonConfig.activeBorderColor ?? withdrawSubmitButtonConfig.borderColor;
+  const withdrawCancelHighlightColor = withdrawCancelButtonConfig.highlightColor ?? withdrawCancelButtonConfig.buttonColor;
+  const withdrawCancelActiveColor = withdrawCancelButtonConfig.activeColor ?? withdrawCancelButtonConfig.buttonColor;
+  const withdrawCancelActiveBorderColor = withdrawCancelButtonConfig.activeBorderColor ?? withdrawCancelButtonConfig.borderColor;
+  const walletAddressCopyDurationMs = Math.max(
+    0,
+    Number(WALLET_DISPLAY.walletAddressButton?.activeDuration ?? 0) * 1000
+  );
   const [isMaxHovering, setIsMaxHovering] = useState(false);
   const addPanelIconButtons = ADD_PANEL_DISPLAY.iconButtons;
   const addPanelButtonSize = addPanelIconButtons.size;
@@ -539,13 +558,41 @@ export default function UserMenu() {
         : ['ETH', 'USDC', 'WETH', 'DAI'];
   const resolveWithdrawState = (panelId: number) =>
     withdrawPanels[panelId] ?? { active: false, token: '', amount: '', address: '' };
+  const resolveWithdrawReceipt = (panelId: number) =>
+    withdrawReceipt[panelId] ?? { active: false, txHash: null };
+  const resolveWalletCopyActive = (key: string) => Boolean(walletAddressCopyState[key]);
+  const triggerWalletCopyState = (key: string) => {
+    setWalletAddressCopyState((prev) => ({ ...prev, [key]: true }));
+    const existing = walletAddressCopyTimers.current[key];
+    if (existing) {
+      clearTimeout(existing);
+    }
+    if (walletAddressCopyDurationMs > 0) {
+      walletAddressCopyTimers.current[key] = setTimeout(() => {
+        setWalletAddressCopyState((prev) => {
+          if (!prev[key]) return prev;
+          const { [key]: _removed, ...rest } = prev;
+          return rest;
+        });
+      }, walletAddressCopyDurationMs);
+    }
+  };
   const toggleWithdrawPanel = (panelId: number) => {
     setWithdrawPanels((prev) => {
       const current = prev[panelId] ?? { active: false, token: '', amount: '', address: '' };
+      const nextActive = !current.active;
       return {
         ...prev,
-        [panelId]: { ...current, active: !current.active },
+        [panelId]: { ...current, active: nextActive },
       };
+    });
+    setWithdrawReceipt((prev) => {
+      const current = prev[panelId] ?? { active: false, txHash: null };
+      if (current.active) {
+        const { [panelId]: _removed, ...rest } = prev;
+        return rest;
+      }
+      return prev;
     });
   };
   const updateWithdrawToken = (panelId: number, token: string) => {
@@ -665,6 +712,17 @@ export default function UserMenu() {
               const { [panel.id]: _removed, ...rest } = prev;
               return rest;
             });
+            setWithdrawReceipt((prev) => {
+              if (!prev[panel.id]) return prev;
+              const { [panel.id]: _removed, ...rest } = prev;
+              return rest;
+            });
+            setWalletAddressCopyState((prev) => {
+              const key = `panel-${panel.id}`;
+              if (!prev[key]) return prev;
+              const { [key]: _removed, ...rest } = prev;
+              return rest;
+            });
           })}
           aria-label="Close wallet panel"
           className="absolute z-10 text-gray-400 hover:text-gray-200 cursor-pointer"
@@ -769,15 +827,27 @@ export default function UserMenu() {
               <button
                 type="button"
                 onClick={() => toggleWithdrawPanel(panel.id)}
+                onMouseEnter={(event) => {
+                  if (withdrawActive) return;
+                  event.currentTarget.style.backgroundColor = topRowButtonHighlightColor;
+                  event.currentTarget.style.borderColor = topRowButtonHighlightBorderColor;
+                }}
+                onMouseLeave={(event) => {
+                  if (withdrawActive) return;
+                  event.currentTarget.style.backgroundColor = topRowButtonColor;
+                  event.currentTarget.style.borderColor = topRowButtonBorderColor;
+                }}
                 className={`flex items-center justify-center rounded-lg border transition-colors cursor-pointer ${withdrawActive
-                  ? 'border-blue-400 bg-blue-500/20 text-blue-100'
-                  : 'border-gray-700 bg-gray-800/60 text-gray-100 hover:border-gray-500 hover:bg-gray-800'
+                  ? 'text-blue-100'
+                  : 'text-gray-100'
                 }`}
                 style={{
                   height: `${buttonHeight}px`,
                   paddingLeft: `${buttonPaddingX}px`,
                   paddingRight: `${buttonPaddingX}px`,
                   fontSize: `${buttonFontSize}px`,
+                  backgroundColor: withdrawActive ? topRowButtonActiveColor : topRowButtonColor,
+                  borderColor: withdrawActive ? topRowButtonActiveBorderColor : topRowButtonBorderColor,
                 }}
               >
                 Withdraw
@@ -807,12 +877,22 @@ export default function UserMenu() {
               ) : (
                 <button
                   type="button"
-                  className="flex items-center justify-center rounded-lg border border-gray-700 bg-gray-800/60 text-gray-100 hover:border-gray-500 hover:bg-gray-800 transition-colors cursor-pointer"
+                  className="flex items-center justify-center rounded-lg border text-gray-100 transition-colors cursor-pointer"
+                  onMouseEnter={(event) => {
+                    event.currentTarget.style.backgroundColor = topRowButtonHighlightColor;
+                    event.currentTarget.style.borderColor = topRowButtonHighlightBorderColor;
+                  }}
+                  onMouseLeave={(event) => {
+                    event.currentTarget.style.backgroundColor = topRowButtonColor;
+                    event.currentTarget.style.borderColor = topRowButtonBorderColor;
+                  }}
                   style={{
                     height: `${buttonHeight}px`,
                     paddingLeft: `${buttonPaddingX}px`,
                     paddingRight: `${buttonPaddingX}px`,
                     fontSize: `${buttonFontSize}px`,
+                    backgroundColor: topRowButtonColor,
+                    borderColor: topRowButtonBorderColor,
                   }}
                 >
                   Get Crypto
@@ -952,14 +1032,37 @@ export default function UserMenu() {
                 console.log('[UserMenu] chainKey:', chainKey);
                 const run = async () => {
                   if (isSolanaChain(chainKey)) {
-                    await executeSolanaTransfer(token, amount, address);
+                    const txHash = await executeSolanaTransfer(token, amount, address);
+                    setWithdrawReceipt((prev) => ({
+                      ...prev,
+                      [panel.id]: { active: true, txHash },
+                    }));
                     return;
                   }
-                  await sendEvmTransfer({ chainKey, recipient: address, tokenSymbol: token, amount });
+                  const txHash = await sendEvmTransfer({ chainKey, recipient: address, tokenSymbol: token, amount });
+                  setWithdrawReceipt((prev) => ({
+                    ...prev,
+                    [panel.id]: { active: true, txHash },
+                  }));
                 };
                 void run().catch((err) => {
                   console.warn('[Withdraw] submit failed', err);
                 });
+              }}
+              onMouseEnter={(event) => {
+                event.currentTarget.style.backgroundColor = withdrawSubmitHighlightColor;
+              }}
+              onMouseLeave={(event) => {
+                event.currentTarget.style.backgroundColor = withdrawSubmitButtonConfig.buttonColor;
+                event.currentTarget.style.borderColor = withdrawSubmitButtonConfig.borderColor;
+              }}
+              onMouseDown={(event) => {
+                event.currentTarget.style.backgroundColor = withdrawSubmitActiveColor;
+                event.currentTarget.style.borderColor = withdrawSubmitActiveBorderColor;
+              }}
+              onMouseUp={(event) => {
+                event.currentTarget.style.backgroundColor = withdrawSubmitButtonConfig.buttonColor;
+                event.currentTarget.style.borderColor = withdrawSubmitButtonConfig.borderColor;
               }}
               className="flex items-center justify-center rounded-lg transition-colors cursor-pointer"
               style={{
@@ -979,6 +1082,21 @@ export default function UserMenu() {
             <button
               type="button"
               onClick={() => toggleWithdrawPanel(panel.id)}
+              onMouseEnter={(event) => {
+                event.currentTarget.style.backgroundColor = withdrawCancelHighlightColor;
+              }}
+              onMouseLeave={(event) => {
+                event.currentTarget.style.backgroundColor = withdrawCancelButtonConfig.buttonColor;
+                event.currentTarget.style.borderColor = withdrawCancelButtonConfig.borderColor;
+              }}
+              onMouseDown={(event) => {
+                event.currentTarget.style.backgroundColor = withdrawCancelActiveColor;
+                event.currentTarget.style.borderColor = withdrawCancelActiveBorderColor;
+              }}
+              onMouseUp={(event) => {
+                event.currentTarget.style.backgroundColor = withdrawCancelButtonConfig.buttonColor;
+                event.currentTarget.style.borderColor = withdrawCancelButtonConfig.borderColor;
+              }}
               className="flex items-center justify-center rounded-lg transition-colors cursor-pointer"
               style={{
                 height: `${buttonHeight}px`,
@@ -995,15 +1113,37 @@ export default function UserMenu() {
               Cancel
             </button>
           </div>
-          {isSolanaChain(panel.chainKey) ? (
+          {resolveWithdrawReceipt(panel.id).active ? (
             <div
-              className="w-full text-center text-xs text-gray-400"
+              className="w-full flex items-center justify-center gap-2 text-xs text-gray-400"
               style={{
                 paddingLeft: `${containerPaddingLeft}px`,
                 paddingRight: `${containerPaddingRight}px`,
               }}
             >
-              Withdrawals Enabled
+              <span>Withdrawal Submitted</span>
+              <a
+                href={(() => {
+                  const txHash = resolveWithdrawReceipt(panel.id).txHash;
+                  if (!txHash) return '#';
+                  return isSolanaChain(panel.chainKey)
+                    ? `https://solscan.io/tx/${txHash}`
+                    : panel.chainKey === 'ETH_MAINNET'
+                      ? `https://etherscan.io/tx/${txHash}`
+                      : panel.chainKey === 'ETH_SEPOLIA'
+                        ? `https://sepolia.etherscan.io/tx/${txHash}`
+                        : panel.chainKey === 'BASE_MAINNET'
+                          ? `https://basescan.org/tx/${txHash}`
+                          : panel.chainKey === 'BASE_SEPOLIA'
+                            ? `https://sepolia.basescan.org/tx/${txHash}`
+                            : '#';
+                })()}
+                target="_blank"
+                rel="noreferrer"
+                className="text-blue-400 hover:text-blue-200"
+              >
+                View Transaction →
+              </a>
             </div>
           ) : null}
           <div className="h-[1px] bg-gray-700 w-full" />
@@ -1021,26 +1161,56 @@ export default function UserMenu() {
           type="button"
           onClick={() => {
             const address = resolveWalletAddress(panel.chainKey);
-            if (address) navigator.clipboard?.writeText(address).catch(() => {});
+            if (address) {
+              navigator.clipboard?.writeText(address).catch(() => {});
+              triggerWalletCopyState(`panel-${panel.id}`);
+            }
+          }}
+          onMouseEnter={(event) => {
+            if (resolveWalletCopyActive(`panel-${panel.id}`)) return;
+            event.currentTarget.style.backgroundColor = topRowButtonHighlightColor;
+            event.currentTarget.style.borderColor = topRowButtonHighlightBorderColor;
+          }}
+          onMouseLeave={(event) => {
+            if (resolveWalletCopyActive(`panel-${panel.id}`)) return;
+            event.currentTarget.style.backgroundColor = topRowButtonColor;
+            event.currentTarget.style.borderColor = topRowButtonBorderColor;
+          }}
+          onMouseDown={(event) => {
+            event.currentTarget.style.backgroundColor = topRowButtonActiveColor;
+            event.currentTarget.style.borderColor = topRowButtonActiveBorderColor;
+          }}
+          onMouseUp={(event) => {
+            const isActive = resolveWalletCopyActive(`panel-${panel.id}`);
+            if (!isActive) {
+              event.currentTarget.style.backgroundColor = topRowButtonColor;
+              event.currentTarget.style.borderColor = topRowButtonBorderColor;
+            }
           }}
           title={resolveWalletAddress(panel.chainKey) || 'Unknown'}
-          className="flex flex-1 min-w-0 items-center justify-center rounded-lg border border-gray-700 bg-gray-800/60 text-gray-100 leading-none hover:border-gray-500 hover:bg-gray-800 transition-colors cursor-pointer overflow-hidden"
+          className="flex flex-1 min-w-0 items-center justify-center rounded-lg border text-gray-100 leading-none transition-colors cursor-pointer overflow-hidden"
           style={{
             height: `${buttonHeight}px`,
             paddingLeft: `${buttonPaddingX / 2}px`,
             paddingRight: `${buttonPaddingX / 2}px`,
             fontSize: `${buttonFontSize}px`,
+            backgroundColor: resolveWalletCopyActive(`panel-${panel.id}`) ? topRowButtonActiveColor : topRowButtonColor,
+            borderColor: resolveWalletCopyActive(`panel-${panel.id}`) ? topRowButtonActiveBorderColor : topRowButtonBorderColor,
           }}
         >
           <span
             className="flex h-full items-center text-right text-sm leading-none relative top-[1px] truncate"
             title={resolveWalletAddress(panel.chainKey) || 'Unknown'}
           >
-            {formatDisplayAddress(resolveWalletAddress(panel.chainKey))}
+            {resolveWalletCopyActive(`panel-${panel.id}`)
+              ? 'Copied Address!'
+              : formatDisplayAddress(resolveWalletAddress(panel.chainKey))}
           </span>
-          <span className="flex w-4 justify-start ml-2">
-            <Copy className="w-4 h-4 inline-flex" />
-          </span>
+          {!resolveWalletCopyActive(`panel-${panel.id}`) ? (
+            <span className="flex w-4 justify-start ml-2">
+              <Copy className="w-4 h-4 inline-flex" />
+            </span>
+          ) : null}
         </button>
       </div>
       <div className="h-[1px] bg-gray-700 w-full" />
