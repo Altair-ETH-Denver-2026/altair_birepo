@@ -1003,7 +1003,7 @@ export default function UserMenu() {
                 paddingRight: `${containerPaddingRight}px`,
               }}
             >
-              Withdrawals enabled
+              Withdrawals Enabled
             </div>
           ) : null}
           <div className="h-[1px] bg-gray-700 w-full" />
