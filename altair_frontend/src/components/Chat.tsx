@@ -1,10 +1,9 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import Image from 'next/image';
 import { SpinningLogo } from './SpinningLogo';
 import { ShieldCheck, Send, Loader2 } from 'lucide-react';
-import Logo from '../image/logo.png';
+import { useLogoAsset } from '../lib/logo';
 import { usePrivy } from '@privy-io/react-auth';
 import { withWaitLogger } from '../lib/waitLogger';
 import { useSwap } from '../lib/useSwap';
@@ -56,6 +55,7 @@ export default function Chat() {
   const [isExecutingSwap, setIsExecutingSwap] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const typingSpeedMs = CHAT_PANEL.typingSpeedMs;
+  const logoAsset = useLogoAsset();
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -385,7 +385,7 @@ export default function Chat() {
                   className="shrink-0 h-10 w-10 rounded-full bg-white/5 border flex items-center justify-center overflow-hidden"
                   style={{ borderColor: CHAT_PANEL.agent_icon_border_color }}
                 >
-                <SpinningLogo src={Logo} alt="Altair" className="h-9 w-9 object-contain" />
+                <SpinningLogo src={logoAsset} alt="Altair" className="h-9 w-9 object-contain" />
               </div>
               <div className="flex w-full flex-col items-start">
                 <div
@@ -439,7 +439,7 @@ export default function Chat() {
         {isLoading && (
           <div className="flex items-start gap-3">
             <div className="shrink-0 h-10 w-10 rounded-full bg-white/5 border border-gray-700 flex items-center justify-center overflow-hidden">
-              <SpinningLogo src={Logo} alt="Altair" className="h-9 w-9 object-contain" />
+              <SpinningLogo src={logoAsset} alt="Altair" className="h-9 w-9 object-contain" />
             </div>
             <div className="bg-gray-800 p-3 rounded-2xl animate-pulse">
               <Loader2 className="w-4 h-4 animate-spin text-gray-400" />

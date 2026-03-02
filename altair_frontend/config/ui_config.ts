@@ -218,3 +218,7 @@ export const CHAT_PANEL = { // Chat panel styling used in altair_frontend1/src/c
   userChatMaxWidth: "75%",
 };
 
+export const LOGO_DISPLAY = {
+  logoFile: 'random',
+  logoFileOptions: ['random', 'logo.png']
+};
